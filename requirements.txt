@@ -1,0 +1,8 @@
+discord.py
+yfinance
+pandas
+numpy
+scipy
+lxml
+pytz
+groq
