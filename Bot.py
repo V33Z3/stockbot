@@ -11,20 +11,50 @@ from scipy.stats import norm
 from datetime import datetime, time
 import pytz
 import urllib.request
+from flask import Flask
+from threading import Thread
 
-# Setup Discord bot & slash command tree
+# -------------------------------------------------------------
+# LIGHTWEIGHT FLASK SERVER (KEEPS FREE RENDER WEB SERVICE ALIVE)
+# -------------------------------------------------------------
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "StockTickerBot is online and healthy!"
+
+def run_flask():
+    # Render binds web services to port 10000 or PORT environment variable
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# Start Flask web server in a separate background thread
+Thread(target=run_flask, daemon=True).start()
+
+# -------------------------------------------------------------
+# DISCORD BOT SETUP
+# -------------------------------------------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Initialize Groq Client via Environment Variable (Free Cloud AI)
+# Initialize Groq Client via Environment Variable
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
+# Global Scanner Settings
+scanner_config = {
+    "channel_id": None,
+    "watchlist": [],                # Populated dynamically with S&P 500
+    "vol_multiplier": 1.5,          # Default: 1.5x Avg Volume
+    "timeframe": "15m",             # Default: 15m intraday bars
+    "enabled": False
+}
 
 # -------------------------------------------------------------
 # DYNAMIC S&P 500 TICKER FETCHING
 # -------------------------------------------------------------
 def get_sp500_tickers():
-    """Fetches the current S&P 500 ticker list from Wikipedia with browser request headers."""
+    """Fetches current S&P 500 ticker list from Wikipedia with browser request headers."""
     try:
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
@@ -37,15 +67,6 @@ def get_sp500_tickers():
     except Exception as e:
         print(f"⚠️ Error fetching S&P 500 list: {e}. Falling back to default list.")
         return ["AAPL", "NVDA", "TSLA", "META", "AMD", "AMZN", "MSFT", "GOOGL", "SPY", "QQQ"]
-
-# Global Scanner Settings
-scanner_config = {
-    "channel_id": None,
-    "watchlist": [],                # Populated dynamically with S&P 500
-    "vol_multiplier": 1.5,          # Default: 1.5x Avg Volume
-    "timeframe": "15m",             # Default: 15m intraday bars
-    "enabled": False
-}
 
 # -------------------------------------------------------------
 # BLACK-SCHOLES GAMMA ENGINE
@@ -506,6 +527,8 @@ async def ask_slash(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"❌ Groq AI Error: {str(e)}")
 
-# RUN BOT USING ENVIRONMENT VARIABLE
+# -------------------------------------------------------------
+# START BOT VIA DISCORD_TOKEN ENVIRONMENT VARIABLE
+# -------------------------------------------------------------
 TOKEN = os.environ.get("DISCORD_TOKEN")
 bot.run(TOKEN)
