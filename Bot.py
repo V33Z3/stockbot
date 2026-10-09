@@ -1,4 +1,5 @@
 import os
+import time
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -8,17 +9,42 @@ import asyncio
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
-from datetime import datetime, time
+from datetime import datetime, time as datetime_time
 import pytz
 import urllib.request
+from flask import Flask
+from threading import Thread
 
-# Setup Discord bot & slash command tree
+# -------------------------------------------------------------
+# LIGHTWEIGHT FLASK SERVER (KEEPS FREE RENDER WEB SERVICE ALIVE)
+# -------------------------------------------------------------
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "StockTickerBot is online and healthy!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+Thread(target=run_flask, daemon=True).start()
+
+# -------------------------------------------------------------
+# DISCORD BOT SETUP
+# -------------------------------------------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Initialize Groq Client via Environment Variable (Free Cloud AI)
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+# Global Scanner Settings
+scanner_config = {
+    "channel_id": None,
+    "watchlist": [],                # Populated dynamically with S&P 500
+    "vol_multiplier": 1.5,          # Default: 1.5x Avg Volume
+    "timeframe": "15m",             # Default: 15m intraday bars
+    "enabled": False
+}
 
 # -------------------------------------------------------------
 # DYNAMIC S&P 500 TICKER FETCHING
@@ -41,21 +67,12 @@ def get_sp500_tickers():
             return tickers
     except Exception as e:
         print(f"⚠️ Wikipedia scraping blocked by Cloudflare ({e}). Loading built-in S&P 500 list.")
-        # Fallback list of major S&P 500 liquid market movers
         return [
             "AAPL", "NVDA", "TSLA", "META", "AMD", "AMZN", "MSFT", "GOOGL", "SPY", "QQQ",
             "NFLX", "BAC", "JPM", "WMT", "UNH", "PG", "JNJ", "HD", "XOM", "CVX",
             "MA", "V", "ORCL", "ABBV", "KO", "PEP", "COST", "AVGO", "LLY", "MRK",
             "DIS", "ADBE", "CRM", "ACN", "CSCO", "INTC", "TXN", "QCOM", "PFE", "CMCSA"
         ]
-# Global Scanner Settings
-scanner_config = {
-    "channel_id": None,
-    "watchlist": [],                # Populated dynamically with S&P 500
-    "vol_multiplier": 1.5,          # Default: 1.5x Avg Volume
-    "timeframe": "15m",             # Default: 15m intraday bars
-    "enabled": False
-}
 
 # -------------------------------------------------------------
 # BLACK-SCHOLES GAMMA ENGINE
@@ -251,8 +268,8 @@ async def hourly_market_scanner():
     if now.weekday() >= 5:
         return
 
-    market_open = time(9, 30)
-    market_close = time(16, 0)
+    market_open = datetime_time(9, 30)
+    market_close = datetime_time(16, 0)
 
     if market_open <= now.time() <= market_close:
         channel = bot.get_channel(scanner_config["channel_id"])
@@ -277,7 +294,6 @@ async def hourly_market_scanner():
 # -------------------------------------------------------------
 @bot.event
 async def on_ready():
-    # Load full S&P 500 ticker list dynamically
     scanner_config["watchlist"] = await asyncio.to_thread(get_sp500_tickers)
 
     try:
@@ -479,8 +495,14 @@ async def stock_slash(interaction: discord.Interaction, ticker: str):
 async def ask_slash(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
 
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        await interaction.followup.send("❌ GROQ_API_KEY environment variable is not set in Render!")
+        return
+
     try:
         def generate_ai():
+            groq_client = Groq(api_key=api_key)
             completion = groq_client.chat.completions.create(
                 model="qwen-2.5-32b",
                 messages=[
@@ -516,6 +538,24 @@ async def ask_slash(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"❌ Groq AI Error: {str(e)}")
 
-# RUN BOT USING ENVIRONMENT VARIABLE
+# -------------------------------------------------------------
+# START BOT WITH RATE-LIMIT RESILIENCE
+# -------------------------------------------------------------
 TOKEN = os.environ.get("DISCORD_TOKEN")
-bot.run(TOKEN)
+
+if not TOKEN:
+    print("❌ DISCORD_TOKEN environment variable is not set!")
+else:
+    while True:
+        try:
+            bot.run(TOKEN)
+            break
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                print("⚠️ Discord API rate limited (429). Retrying in 30 seconds...")
+                time.sleep(30)
+            else:
+                raise e
+        except Exception as e:
+            print(f"❌ Connection error: {e}. Retrying in 10 seconds...")
+            time.sleep(10)
