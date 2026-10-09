@@ -11,33 +11,43 @@ from scipy.stats import norm
 from datetime import datetime, time
 import pytz
 import urllib.request
-from flask import Flask
-from threading import Thread
 
-# -------------------------------------------------------------
-# LIGHTWEIGHT FLASK SERVER (KEEPS FREE RENDER WEB SERVICE ALIVE)
-# -------------------------------------------------------------
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "StockTickerBot is online and healthy!"
-
-def run_flask():
-    # Render binds web services to port 10000 or PORT environment variable
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
-# Start Flask web server in a separate background thread
-Thread(target=run_flask, daemon=True).start()
-
-# -------------------------------------------------------------
-# DISCORD BOT SETUP
-# -------------------------------------------------------------
+# Setup Discord bot & slash command tree
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Initialize Groq Client via Environment Variable (Free Cloud AI)
+groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+
+# -------------------------------------------------------------
+# DYNAMIC S&P 500 TICKER FETCHING
+# -------------------------------------------------------------
+def get_sp500_tickers():
+    """Fetches current S&P 500 tickers with Cloudflare bypass headers & fallback."""
+    try:
+        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            tables = pd.read_html(response)
+            df = tables[0]
+            tickers = df['Symbol'].str.replace('.', '-', regex=False).tolist()
+            print(f"✅ Successfully loaded {len(tickers)} S&P 500 tickers from Wikipedia.")
+            return tickers
+    except Exception as e:
+        print(f"⚠️ Wikipedia scraping blocked by Cloudflare ({e}). Loading built-in S&P 500 list.")
+        # Fallback list of major S&P 500 liquid market movers
+        return [
+            "AAPL", "NVDA", "TSLA", "META", "AMD", "AMZN", "MSFT", "GOOGL", "SPY", "QQQ",
+            "NFLX", "BAC", "JPM", "WMT", "UNH", "PG", "JNJ", "HD", "XOM", "CVX",
+            "MA", "V", "ORCL", "ABBV", "KO", "PEP", "COST", "AVGO", "LLY", "MRK",
+            "DIS", "ADBE", "CRM", "ACN", "CSCO", "INTC", "TXN", "QCOM", "PFE", "CMCSA"
+        ]
 # Global Scanner Settings
 scanner_config = {
     "channel_id": None,
@@ -46,24 +56,6 @@ scanner_config = {
     "timeframe": "15m",             # Default: 15m intraday bars
     "enabled": False
 }
-
-# -------------------------------------------------------------
-# DYNAMIC S&P 500 TICKER FETCHING
-# -------------------------------------------------------------
-def get_sp500_tickers():
-    """Fetches current S&P 500 ticker list from Wikipedia with browser request headers."""
-    try:
-        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        with urllib.request.urlopen(req) as response:
-            tables = pd.read_html(response)
-            df = tables[0]
-            tickers = df['Symbol'].str.replace('.', '-', regex=False).tolist()
-            print(f"✅ Successfully loaded {len(tickers)} S&P 500 tickers for volume scanning.")
-            return tickers
-    except Exception as e:
-        print(f"⚠️ Error fetching S&P 500 list: {e}. Falling back to default list.")
-        return ["AAPL", "NVDA", "TSLA", "META", "AMD", "AMZN", "MSFT", "GOOGL", "SPY", "QQQ"]
 
 # -------------------------------------------------------------
 # BLACK-SCHOLES GAMMA ENGINE
@@ -487,14 +479,8 @@ async def stock_slash(interaction: discord.Interaction, ticker: str):
 async def ask_slash(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
 
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        await interaction.followup.send("❌ GROQ_API_KEY environment variable is not set in Render!")
-        return
-
     try:
         def generate_ai():
-            groq_client = Groq(api_key=api_key)
             completion = groq_client.chat.completions.create(
                 model="qwen-2.5-32b",
                 messages=[
@@ -530,8 +516,6 @@ async def ask_slash(interaction: discord.Interaction, prompt: str):
     except Exception as e:
         await interaction.followup.send(f"❌ Groq AI Error: {str(e)}")
 
-# -------------------------------------------------------------
-# START BOT VIA DISCORD_TOKEN ENVIRONMENT VARIABLE
-# -------------------------------------------------------------
+# RUN BOT USING ENVIRONMENT VARIABLE
 TOKEN = os.environ.get("DISCORD_TOKEN")
 bot.run(TOKEN)
