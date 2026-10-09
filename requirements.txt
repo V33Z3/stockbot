@@ -6,3 +6,4 @@ scipy
 lxml
 pytz
 groq
+flask
