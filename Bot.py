@@ -38,9 +38,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Initialize Groq Client via Environment Variable
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
 # Global Scanner Settings
 scanner_config = {
     "channel_id": None,
@@ -490,8 +487,14 @@ async def stock_slash(interaction: discord.Interaction, ticker: str):
 async def ask_slash(interaction: discord.Interaction, prompt: str):
     await interaction.response.defer()
 
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        await interaction.followup.send("❌ GROQ_API_KEY environment variable is not set in Render!")
+        return
+
     try:
         def generate_ai():
+            groq_client = Groq(api_key=api_key)
             completion = groq_client.chat.completions.create(
                 model="qwen-2.5-32b",
                 messages=[
